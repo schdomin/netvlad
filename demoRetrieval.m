@@ -22,9 +22,10 @@ net= relja_simplenn_tidy(net);
 
 
 
-% --- Oxford Buildings / Paris Buildings
+% --- Oxford Buildings / Pafearis Buildings
 
-dsetName= 'ox5k'; % change to `'paris'` for Paris Buildings
+dsetName = 'kitti'; % change to `'paris'` for Paris Buildings
+sequence = '02';
 
 % Define if you want to use the query ROI information.
 % The original evaluation procedure for Oxford / Paris DOES use ROIs,
@@ -47,7 +48,7 @@ dsetName= 'ox5k'; % change to `'paris'` for Paris Buildings
 % To use the ROI: specify the receptive field size (can be 0 for a tight crop)
 % Not to use the ROI (not recommended): specify a negative number
 
-useROI= true;
+useROI= false;
 if useROI
     lastConvLayer= find(ismember(relja_layerTypes(net), 'custom'),1)-1; % Relies on the fact that NetVLAD, Max and Avg pooling are implemented as a custom layer and are the first custom layer in the network. Change if you use another network which has other custom layers before
     netBottom= net;
@@ -63,66 +64,22 @@ else
     strMode= 'full';
 end
 
-dbTest= dbVGG(dsetName, recFieldSize);
+%ds load kitti dataset
+dbTest= dbKITTI(sequence);
 
 % Compute db image representations (images have different resolutions so batchSize is constrained to 1)
+disp('transforming reference images:');
 dbFeatFn= sprintf('%s%s_%s_db.bin', paths.outPrefix, netID, dbTest.name);
-serialAllFeats(net, dbTest.dbPath, dbTest.dbImageFns, dbFeatFn, 'batchSize', 1);
-
-if useROI
-    qFeatFn = sprintf('%s%s_%s_q_%d.bin', paths.outPrefix, netID, dbTest.name, recFieldSize);
-    serialAllFeats(net, dbTest.qPath, dbTest.qImageFns, qFeatFn, 'batchSize', 1);
-end
+serialAllFeats(net, dbTest.dbPath, dbTest.dbImageFns, dbFeatFn, 'batchSize', 1, 'useGPU', true);
 
 % Load the image representations
 dbFeat= fread( fopen(dbFeatFn, 'rb'), inf, 'float32=>single');
 dbFeat= reshape(dbFeat, [], dbTest.numImages);
 nDims= size(dbFeat, 1);
-if useROI
-    qFeat= fread( fopen(qFeatFn, 'rb'), [nDims, dbTest.numImages], 'float32=>single');
-    assert(size(qFeat,2)==dbTest.numQueries);
-else
-    qFeat= dbFeat(:, dbTest.queryIDs);
-end
+qFeat= dbFeat;
 
-% Measure recall@N
-mAP= relja_retrievalMAP(dbTest, struct('db', dbFeat, 'qs', qFeat), true);
-relja_display('Performance on %s (%s), %d-D: %.2f', dbTest.name, strMode, size(dbFeat,1), mAP*100);
+%ds classify
+computeConfusionMatrix(dbTest, struct('db', dbFeat, 'qs', qFeat), true, sequence);
 
-% Try 256-D
-D= 256;
-mAPsmall= relja_retrievalMAP(dbTest, struct( ...
-    'db', relja_l2normalize_col(dbFeat(1:D,:)), ...
-    'qs', relja_l2normalize_col(qFeat(1:D,:)) ...
-    ), true);
-relja_display('Performance on %s (%s), %d-D: %.2f', dbTest.name, strMode, D, mAPsmall*100);
-
-
-
-% --- Holidays
-
-useRotated= false; % for rotated Holidays
-dbTest= dbHolidays(useRotated); % it will automatically downscale images to (1024x768) pixels, as per the original testing procedure (see the Holidays website)
-
-% Set the output filename for the database (query images are a subset)
-dbFeatFn= sprintf('%s%s_%s_db.bin', paths.outPrefix, netID, dbTest.name);
-
-% Compute db image representations (images have different resolutions so batchSize is constrained to 1)
-serialAllFeats(net, dbTest.dbPath, dbTest.dbImageFns, dbFeatFn, 'batchSize', 1);
-
-% Load the image representations
-dbFeat= fread( fopen(dbFeatFn, 'rb'), inf, 'float32=>single');
-dbFeat= reshape(dbFeat, [], dbTest.numImages);
-nDims= size(dbFeat, 1);
-qFeat= dbFeat(:, dbTest.queryIDs);
-
-mAP= relja_retrievalMAP(dbTest, struct('db', dbFeat, 'qs', qFeat), true);
-relja_display('Performance on %s, %d-D: %.2f', dbTest.name, size(dbFeat,1), mAP*100);
-
-% Try 256-D
-D= 256;
-mAPsmall= relja_retrievalMAP(dbTest, struct( ...
-    'db', relja_l2normalize_col(dbFeat(1:D,:)), ...
-    'qs', relja_l2normalize_col(qFeat(1:D,:)) ...
-    ), true);
-relja_display('Performance on %s, %d-D: %.2f', dbTest.name, D, mAPsmall*100);
+%ds evaluate precision recall curve
+evaluatePrecisionRecall(sequence);
